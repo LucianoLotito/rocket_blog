@@ -1,10 +1,10 @@
 use crate::database::establish_connection_pg;
-use crate::diesel::BelongingToDsl;
+use crate::models::category::Category;
 use crate::models::post::*;
 use crate::schema::*;
 extern crate diesel;
 use diesel::result::Error;
-use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SelectableHelper};
+use diesel::{ExpressionMethods, NullableExpressionMethods, QueryDsl, RunQueryDsl};
 use rocket::response::{status::Accepted, status::Created, Debug};
 use rocket::serde::json::Json;
 use rocket::{delete, get, post, put, routes};
@@ -12,7 +12,7 @@ type Result<T, E = Debug<Error>> = std::result::Result<T, E>;
 use rocket::Route;
 
 pub fn post_routes() -> Vec<Route> {
-    routes![create, retrieve, update, delete,]
+    routes![create, retrieve, update, delete, post_category]
 }
 
 #[post("/post", format = "json", data = "<post>")]
@@ -81,11 +81,36 @@ fn delete(id: i32) -> Result<Accepted<Json<Aldo>>> {
 }
 
 #[get("/post/<id>/category")]
-fn post_category(id: i32) -> Result<Accepted<Json<PostWithCategory>>> {
-    let category = categories::table
-        .find(1)
-        .load(&mut establish_connection_pg());
-    let posts = Post::belonging_to(&category)
-        .select(Post::as_select())
-        .load(&mut establish_connection_pg());
+fn post_category(id: i32) -> Result<Accepted<Json<PostCategory>>> {
+    let results: Vec<PostWithCategory> = posts::table
+        .left_join(categories::table)
+        .select((
+            posts::id,
+            posts::title,
+            posts::body,
+            posts::published,
+            posts::category_id.nullable(),
+            categories::id.nullable(),
+            categories::name.nullable(),
+        ))
+        .filter(posts::id.eq(id))
+        .load(&mut establish_connection_pg())
+        .expect("Error loading results");
+
+    match results.first() {
+        Some(result) => Ok(Accepted(Json(PostCategory {
+            post: Post {
+                id: result.post_id,
+                title: result.post_title.to_string(),
+                body: result.post_body.to_string(),
+                published: result.post_published,
+                category_id: result.post_category_id,
+            },
+            category: match (result.category_id, result.cattegory_name.clone()) {
+                (Some(id), Some(name)) => Some(Category { id, name }),
+                (_, _) => None,
+            },
+        }))),
+        None => Err(Debug(Error::NotFound)),
+    }
 }
